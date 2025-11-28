@@ -1,0 +1,66 @@
+x-common-env: &common-env
+  KAFKA_CONTROLLER_LISTENER-NAMES: CONTROLLER
+  KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: 'CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT'
+  KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+  KAFKA_CONTROLLER_QUORUM_VOTERS: '1@broker1:29093,2@broker2:29093'
+  KAFKA_PROCESS_ROLES: 'broker,controller' #combined mode 
+  KAFKA_GROUP_INITIAL_REBALANCE_DELAYS_MS: 0
+  KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 2 #two cause there are only two brokers in our cluster
+  KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 2
+  CLUSTER_ID: "ciWo7IWazngRchmPES6q5A=="
+  KAFKA_LOGS_DIRS: tmp/kraft-combined-logs 
+  KAFKA_METRIC_REPORTERS: io.confluent.metrics.reporter.ConfluentMetricsReporter
+  CONFLUENT_METRICS_REPORTER_TOPIC_REPLICAS: 1
+  CONFLUENT_METRICS_ENABLE: 'true' #view metrics on control center
+  CONFLUENT_SUPPORT_CUSTOMER_ID: anonymous
+
+#cause control center and schema registry are directly dependent on the kafka brokers
+x-common-healthcheck: &common-healthcheck
+  interval: 10s
+  timeout: 5s
+  retries: 5
+
+services:
+  broker1:
+    image: confluentinc/cp-server
+    container_name: broker1
+    hostname: broker1
+    ports:
+      - "9092:9092"
+    environment:
+      <<: *common-env
+      KAFKA_NODE_ID: 1
+      KAFKA_LISTENERS: 'INTERNAL://broker1:29092,CONTROLLER://broker1:29093,EXTERNAL://0.0.0.0:9092'
+      KAFKA_ADVERTISED_LISTENERS: 'INTERNAL://broker1:29092,EXTERNAL://0.0.0.0:9092'
+      CONFLUENT_METRICS_REPORTER_BOOTSTRAP_SERVERS: broker1:29092
+    healthcheck:
+      <<: *common-healthcheck
+      test: ["CMD", "bash", "-c" , "echo 'ruok' | nc localhost 9092"]
+    networks:
+      - lakehousenw
+
+  broker2:
+    image: confluentinc/cp-server
+    container_name: broker2
+    hostname: broker2
+    ports:
+      - "9093:9093"
+    environment:
+      <<: *common-env
+      KAFKA_NODE_ID: 2
+      KAFKA_LISTENERS: 'INTERNAL://broker2:29092,CONTROLLER://broker1:29093,EXTERNAL://0.0.0.0:9093'
+      KAFKA_ADVERTISED_LISTENERS: 'INTERNAL://broker2:29092,EXTERNAL://0.0.0.0:9093'
+      CONFLUENT_METRICS_REPORTER_BOOTSTRAP_SERVERS: broker2:29092
+    healthcheck:
+      <<: *common-healthcheck
+      test: ["CMD", "bash", "-c" , "echo 'ruok' | nc localhost 9093"]
+    networks:
+      - lakehousenw
+
+networks:
+  lakehousenw:
+
+      
+    
+    
+
