@@ -1,66 +1,104 @@
+# Common Kafka environment (shared by both brokers)
 x-common-env: &common-env
-  KAFKA_CONTROLLER_LISTENER-NAMES: CONTROLLER
-  KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: 'CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT'
-  KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
-  KAFKA_CONTROLLER_QUORUM_VOTERS: '1@broker1:29093,2@broker2:29093'
-  KAFKA_PROCESS_ROLES: 'broker,controller' #combined mode 
-  KAFKA_GROUP_INITIAL_REBALANCE_DELAYS_MS: 0
-  KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 2 #two cause there are only two brokers in our cluster
-  KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 2
-  CLUSTER_ID: "ciWo7IWazngRchmPES6q5A=="
-  KAFKA_LOGS_DIRS: tmp/kraft-combined-logs 
+  KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER                   # Listener used by the controller role
+  KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT"
+  KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL                    # Listener used for inter-broker communication
+  KAFKA_CONTROLLER_QUORUM_VOTERS: "1@broker1:29093,2@broker2:29093"  # KRaft controller quorum (nodeId@host:port)
+  KAFKA_PROCESS_ROLES: "broker,controller"                      # Combined broker + controller process
+  KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0                     # No delay before consumer group rebalance
+  KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 2                     # RF for __consumer_offsets (2 brokers)
+  KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 2             # RF for transaction state log
+  CLUSTER_ID: "ciWo7IWazngRchmPES6q5A=="                  # Stable KRaft cluster ID
+  KAFKA_LOG_DIRS: /tmp/kraft-combined-logs                      # Data directory
   KAFKA_METRIC_REPORTERS: io.confluent.metrics.reporter.ConfluentMetricsReporter
-  CONFLUENT_METRICS_REPORTER_TOPIC_REPLICAS: 1
-  CONFLUENT_METRICS_ENABLE: 'true' #view metrics on control center
-  CONFLUENT_SUPPORT_CUSTOMER_ID: anonymous
+  CONFLUENT_METRICS_REPORTER_TOPIC_REPLICAS: 1                  # RF for metrics topic
+  CONFLUENT_METRICS_ENABLE: "true"                              # Enable metrics from brokers
+  CONFLUENT_SUPPORT_CUSTOMER_ID: "anonymous"                    # Dev / test mode
 
-#cause control center and schema registry are directly dependent on the kafka brokers
+# Shared healthcheck settings
 x-common-healthcheck: &common-healthcheck
-  interval: 10s
-  timeout: 5s
-  retries: 5
+  interval: 10s                                                 # Run every 10 seconds
+  timeout: 5s                                                   # Fail if longer than 5 seconds
+  retries: 5                                                    # Mark unhealthy after 5 failures
 
 services:
+  # =========================
+  # Broker 1 (KRaft combined)
+  # =========================
   broker1:
-    image: confluentinc/cp-server
+    image: confluentinc/cp-server:7.5.0                         # Confluent Kafka broker (pinned version)
     container_name: broker1
     hostname: broker1
     ports:
-      - "9092:9092"
+      - "9092:9092"                                             # Host port -> EXTERNAL listener
     environment:
-      <<: *common-env
-      KAFKA_NODE_ID: 1
-      KAFKA_LISTENERS: 'INTERNAL://broker1:29092,CONTROLLER://broker1:29093,EXTERNAL://0.0.0.0:9092'
-      KAFKA_ADVERTISED_LISTENERS: 'INTERNAL://broker1:29092,EXTERNAL://0.0.0.0:9092'
-      CONFLUENT_METRICS_REPORTER_BOOTSTRAP_SERVERS: broker1:29092
+      <<: *common-env                                           # Inherit shared Kafka config
+      KAFKA_NODE_ID: 1                                          # Unique node ID in the KRaft cluster
+      # Bind listeners (where the broker actually listens)
+      KAFKA_LISTENERS: "INTERNAL://broker1:29092,CONTROLLER://broker1:29093,EXTERNAL://0.0.0.0:9092"
+      # Advertised addresses (what clients / other brokers see)
+      # IMPORTANT: no 0.0.0.0 here, only real hostnames
+      KAFKA_ADVERTISED_LISTENERS: "INTERNAL://broker1:29092,EXTERNAL://localhost:9092"
+      CONFLUENT_METRICS_REPORTER_BOOTSTRAP_SERVERS: "broker1:29092"  # Metrics reporter uses INTERNAL listener
     healthcheck:
       <<: *common-healthcheck
-      test: ["CMD", "bash", "-c" , "echo 'ruok' | nc localhost 9092"]
+      test: ["CMD", "bash", "-c", "echo 'ruok' | nc localhost 9092"] # Simple TCP check on port 9092
     networks:
       - lakehousenw
 
+  # =========================
+  # Broker 2 (KRaft combined)
+  # =========================
   broker2:
-    image: confluentinc/cp-server
+    image: confluentinc/cp-server:7.5.0
     container_name: broker2
     hostname: broker2
     ports:
-      - "9093:9093"
+      - "9093:9093"                                             # Host port -> EXTERNAL listener
     environment:
       <<: *common-env
-      KAFKA_NODE_ID: 2
-      KAFKA_LISTENERS: 'INTERNAL://broker2:29092,CONTROLLER://broker1:29093,EXTERNAL://0.0.0.0:9093'
-      KAFKA_ADVERTISED_LISTENERS: 'INTERNAL://broker2:29092,EXTERNAL://0.0.0.0:9093'
-      CONFLUENT_METRICS_REPORTER_BOOTSTRAP_SERVERS: broker2:29092
+      KAFKA_NODE_ID: 2                                          # Unique node ID for second broker
+      KAFKA_LISTENERS: "INTERNAL://broker2:29092,CONTROLLER://broker2:29093,EXTERNAL://0.0.0.0:9093"
+      # Again: no 0.0.0.0 in advertised listeners
+      KAFKA_ADVERTISED_LISTENERS: "INTERNAL://broker2:29092,EXTERNAL://localhost:9093"
+      CONFLUENT_METRICS_REPORTER_BOOTSTRAP_SERVERS: "broker2:29092"
     healthcheck:
       <<: *common-healthcheck
-      test: ["CMD", "bash", "-c" , "echo 'ruok' | nc localhost 9093"]
+      test: ["CMD", "bash", "-c", "echo 'ruok' | nc localhost 9093"]
     networks:
       - lakehousenw
 
+  # =========================
+  # Confluent Control Center
+  # =========================
+  control-center:
+    image: confluentinc/cp-enterprise-control-center:7.5.0      # Same platform version as brokers
+    hostname: control-center
+    container_name: control-center
+    depends_on:                                                 # Wait for brokers to be healthy
+      broker1:
+        condition: service_healthy
+      broker2:
+        condition: service_healthy
+    ports:
+      - "9021:9021"                                             # Web UI on host port 9021
+    environment:
+      CONTROL_CENTER_BOOTSTRAP_SERVERS: "broker1:29092,broker2:29092"    # Use INTERNAL listeners
+      # CONTROL_CENTER_SCHEMA_REGISTRY_URL: "http://schema-registry:8081"  # Enable if you add Schema Registry
+      CONTROL_CENTER_REPLICATION_FACTOR: 2                      # RF for internal topics (2 brokers)
+      CONTROL_CENTER_INTERNAL_TOPICS_PARTITIONS: 1              # Partitions for internal topics
+      CONTROL_CENTER_MONITORING_INTERCEPTOR_TOPIC_PARTITIONS: 1 # Partitions for monitoring topics
+      CONFLUENT_METRICS_TOPIC_REPLICATION: 2                    # RF for metrics topic (matches broker count)
+      CONFLUENT_METRICS_ENABLE: "false"                         # Can turn to 'true' if you use client interceptors
+      PORT: 9021                                                # Internal HTTP port inside container
+    networks:
+      - lakehousenw
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9021/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
 networks:
   lakehousenw:
-
-      
-    
-    
-
+    driver: bridge                                              # Simple user-defined bridge network
